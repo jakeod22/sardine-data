@@ -1,0 +1,98 @@
+# The only non-data file in this repository.
+#
+# Once a week it downloads the two full per-window history CSVs from
+# sardine.info, checks they are real gzip and not a truncated transfer or an
+# error page, and publishes them as a GitHub release tagged by date.
+#
+# It runs here rather than on the machine that records the markets for one
+# reason: that machine authenticates with an SSH deploy key, and a deploy key
+# can push commits but cannot create releases. Doing it here needs no secret at
+# all -- GITHUB_TOKEN is issued to the job by GitHub and is scoped to this
+# repository.
+#
+# It reads only public URLs. It has no access to the recording machine.
+name: Weekly history release
+
+on:
+  schedule:
+    # Sunday 07:00 UTC, after the nightly table rebuild and push.
+    - cron: '0 7 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the history files
+        run: |
+          set -euo pipefail
+          # Served with Content-Encoding: gzip. WITHOUT --compressed curl
+          # writes the compressed bytes straight to disk, which is what we
+          # want -- the asset is the .gz.
+          for f in sardine_history_btc_15m sardine_history_btc_hourly; do
+            curl -fsS --max-time 600 --retry 3 --retry-delay 10 \
+              -o "$f.csv.gz" "https://sardine.info/data/$f.csv"
+          done
+          curl -fsS --max-time 60 -o manifest.json \
+            "https://sardine.info/data/manifest.json"
+
+      - name: Verify them
+        run: |
+          set -euo pipefail
+          for f in sardine_history_btc_15m sardine_history_btc_hourly; do
+            # An error page or a truncated transfer is not a release asset.
+            # gzip -t reads the whole stream and checks the CRC, so a cut-off
+            # download fails here rather than being published as history.
+            gzip -t "$f.csv.gz"
+            rows=$(gzip -dc "$f.csv.gz" | wc -l)
+            echo "$f: $rows lines"
+            if [ "$rows" -lt 100 ]; then
+              echo "::error::$f has only $rows lines — refusing to publish" >&2
+              exit 1
+            fi
+            # It must actually be the CSV we think it is.
+            head1=$(gzip -dc "$f.csv.gz" | head -1)
+            case "$head1" in
+              window_open_utc,*) ;;
+              *) echo "::error::$f header is not the expected CSV: $head1" >&2
+                 exit 1 ;;
+            esac
+          done
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="history-$(date -u +%Y-%m-%d)"
+          NOTES=$(python3 - <<'PY'
+          import json
+          m = json.load(open("manifest.json"))
+          lines = ["Full per-window history, gzipped.", ""]
+          for f in m["files"]:
+              if not str(f.get("file", "")).startswith("sardine_history"):
+                  continue
+              lines.append(
+                  "- **%s** — %s rows, %s settled windows, %s to %s"
+                  % (f["file"], format(f.get("rows") or 0, ","),
+                     format(f.get("windows") or 0, ","),
+                     f.get("from") or "?", f.get("to") or "?"))
+          lines += ["", "Counts of what happened, never forecasts. "
+                        "Cite as: Sardine (sardine.info), CC BY 4.0.",
+                    "", "Column definitions: https://sardine.info/how#downloads"]
+          print("\n".join(lines))
+          PY
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              sardine_history_btc_15m.csv.gz \
+              sardine_history_btc_hourly.csv.gz --clobber
+          else
+            gh release create "$TAG" \
+              sardine_history_btc_15m.csv.gz \
+              sardine_history_btc_hourly.csv.gz \
+              --title "History $TAG" --notes "$NOTES"
+          fi
