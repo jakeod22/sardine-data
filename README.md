@@ -1,0 +1,157 @@
+# sardine-data
+
+Settlement data for Kalshi BTC binary contracts, counted from settled markets
+and published as CSV. Refreshed nightly from the machine that records it.
+
+**These are counts of what happened. None of it is a forecast, a signal, or
+advice.** A rate in this repository says: of the past windows that matched
+this description, this share settled YES. It says nothing about the next one.
+
+Cite as: **Sardine (sardine.info), CC BY 4.0**
+
+---
+
+## What a "window" is
+
+A Kalshi BTC 15-minute contract opens on the quarter hour (`:00`, `:15`,
+`:30`, `:45` UTC) and settles 15 minutes later. Each window is a single binary
+market asking whether BTC finished above the level the window opened at.
+
+**Settlement rule.** Kalshi settles these against CF Benchmarks' BTC
+Real-Time Index using a **60-second average** of that index over the final
+minute of the window — not a single price at the closing instant. The strike
+is the index level at the window open. Hourly contracts (`KXBTCD`) work the
+same way over 60 minutes.
+
+**One window, one observation.** A window is counted once, however many
+strikes it listed. Counting strike-rows instead would multiply the apparent
+sample by roughly five and overstate the evidence; every `windows` column here
+counts distinct settled windows. A window's outcome is the majority outcome of
+its settled rows.
+
+---
+
+## Files
+
+### `kalshi_btc_15min_base_rates.csv`
+
+How often 15-minute contracts settled YES, by the price Sardine published for
+them and by how much time was left on the window.
+
+| column | meaning |
+|---|---|
+| `price_bucket_cents` | The published probability, in cents, as a 10-wide bucket (`0-10`, `10-20`, …). `all` in `seconds_left` means the bucket across every checkpoint. |
+| `seconds_left` | Seconds remaining until the window closed when the observation was taken: `120`, `300`, `480`, `720`, `900`, or `all`. |
+| `settled_yes_pct` | Share of those windows that settled YES, as a percentage. |
+| `windows` | Number of **distinct settled windows** behind the cell. |
+| `ci_low_pct`, `ci_high_pct` | 95% Wilson score interval on `settled_yes_pct`. |
+| `mean_published_pct` | Mean probability Sardine published across those windows — compare against `settled_yes_pct` to judge calibration. |
+
+**The `windows` values do not sum to the total, and are not meant to.** A
+window is observed five times as it runs down, and its price can fall in a
+different bucket at each observation, so one window is counted in every bucket
+it passed through — about 3.3 of them on average. Rows with `seconds_left=all`
+count each window once within their bucket.
+
+A cell appears only where at least 60 distinct settled windows support it.
+Thinner cells are omitted rather than published as noise.
+
+### `kalshi_btc_fees.csv`
+
+Kalshi's taker fee at every price, and the win rate needed to break even.
+
+| column | meaning |
+|---|---|
+| `price_cents` | Contract price, 1 to 99. |
+| `fee_per_contract_cents_order_100` | Fee per contract on an order of 100. |
+| `fee_single_contract_cents` | Fee on a one-contract order. |
+| `breakeven_win_rate_pct` | Win rate needed to break even buying YES at that price: `price + fee`. |
+
+The formula is `0.07 × C × p × (1 − p)`, where `C` is contracts and `p` the
+price in dollars, **rounded up to the next cent once per order**. The round-up
+is why the two fee columns differ: a one-contract order pays a whole cent and
+costs up to 40% more per contract than the same price in size. The fee peaks
+in the middle of the book — at 50¢ it is 1.76¢ per contract, so a 50¢ contract
+needs a 51.76% win rate, not 50%.
+
+The fee does not depend on side: `p × (1 − p)` is symmetric, so YES at 30¢ and
+NO at 70¢ carry the same charge.
+
+### `kalshi_vs_polymarket_btc_15min.csv`
+
+Mechanical differences between the two venues' 15-minute BTC contracts:
+settlement index, settlement endpoint, tie rule, window naming, and fees.
+
+| column | meaning |
+|---|---|
+| `attribute` | The property being compared. |
+| `kalshi_kxbtc15m` | How Kalshi's contract behaves. |
+| `polymarket_btc_15m` | How Polymarket's contract behaves. |
+
+**This file contains no Polymarket settlement statistics, and that is
+deliberate.** Sardine has not published settlement history for Polymarket. A
+reconstruction exists internally and is not good enough to publish: it
+substitutes a third price index for both venues' own, and that substitution
+moves the result by more than the difference being measured, so any percentage
+it produced would describe the proxy rather than Polymarket. A recorder is now
+capturing Polymarket's own book and its own resolved windows; figures will
+appear when that data passes the same calibration gate every other published
+number passes.
+
+---
+
+## What is not here
+
+- **The full observation-level history, in git.** See *Full history* below —
+  it ships as a release asset, not as a nightly commit.
+- **Code.** This repository is data only. The tables are generated by the
+  software that serves sardine.info.
+- **Anything about a person.** No accounts, no identifiers, no request logs.
+
+## Full history
+
+The complete per-window CSVs — every observation behind the tables above — are
+published as a **weekly GitHub release**, gzipped, with the release tagged by
+date (`history-YYYY-MM-DD`). Each release carries:
+
+| asset | contents |
+|---|---|
+| `sardine_history_btc_15m.csv.gz` | Every checkpoint observation for 15-minute contracts |
+| `sardine_history_btc_hourly.csv.gz` | The same for hourly contracts |
+
+They are releases rather than tracked files on purpose. Uncompressed they are
+roughly 4 MB and 49 MB, and both are rewritten every half hour; committing them
+nightly would add gigabytes of near-duplicate blobs a year and make the
+repository slow to clone for the sake of data that is already downloadable.
+
+The current versions are always served directly, and are the same files the
+tables in this repository are built from:
+
+- https://sardine.info/data/sardine_history_btc_15m.csv
+- https://sardine.info/data/sardine_history_btc_hourly.csv
+- https://sardine.info/data/manifest.json — row counts, window counts and date
+  ranges for each
+
+Columns in the history files are documented at
+https://sardine.info/how#downloads.
+
+## Refresh
+
+Pushed nightly from the machine that records the markets, after the same build
+that publishes the tables on sardine.info. If a build fails its internal
+cross-check against the published record, nothing is pushed and the previous
+day's files stay — a stale true number over a fresh wrong one.
+
+The human-readable versions, with the same numbers:
+
+- https://sardine.info/data/kalshi-btc-15min-base-rates
+- https://sardine.info/data/kalshi-vs-polymarket-btc-15min
+- https://sardine.info/data/kalshi-btc-fees
+
+## Licence
+
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Use it for anything,
+including commercially; credit **Sardine (sardine.info)**.
+
+Past frequency is not a prediction of the next window. Nothing here is
+financial advice.
